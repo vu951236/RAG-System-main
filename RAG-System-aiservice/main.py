@@ -14,7 +14,7 @@ from algorithms import (
     calculate_cosine_similarity
 )
 
-app = FastAPI(title="Universal Precision Search RAG with OCR + Highlight")
+app = FastAPI(title="Search RAG with OCR")
 
 reader = easyocr.Reader(['vi', 'en'])
 
@@ -27,38 +27,64 @@ def minimal_normalize(text):
         return ""
     return " ".join(text.split())
 
-# HIGHLIGHT (CHỮ ĐỎ)
-def highlight_text(content_text, query_tokens):
+def chunk_contains_exact_bigram(text, query_tokens):
 
-    highlighted = content_text
+    if len(query_tokens) < 2:
+        return False
 
-    words = sorted(
-        list(set([w for w in query_tokens if len(w) > 1])),
-        key=len,
-        reverse=True
-    )
+    text_lower = text.lower()
 
-    for word in words:
-        pattern = re.compile(rf"\b{re.escape(word)}\b", re.IGNORECASE)
-        highlighted = pattern.sub(
-            lambda m: f'<font color="#ff0000"><b>{m.group(0)}</b></font>',
-            highlighted
+    for i in range(len(query_tokens) - 1):
+        bigram = query_tokens[i].lower() + " " + query_tokens[i+1].lower()
+        pattern = r'\b' + re.escape(bigram) + r'\b'
+
+        if re.search(pattern, text_lower):
+            return True
+
+    return False
+
+def highlight_exact_bigrams(text, query_tokens):
+
+    if len(query_tokens) < 2:
+        return text
+
+    for i in range(len(query_tokens) - 1):
+        bigram = query_tokens[i].lower() + " " + query_tokens[i+1].lower()
+        pattern = r'\b' + re.escape(bigram) + r'\b'
+
+        text = re.sub(
+            pattern,
+            lambda m: f"<font color='red'><b>{m.group()}</b></font>",
+            text,
+            flags=re.IGNORECASE
         )
 
-    return highlighted
+    return text
 
-# ASK LOGIC
+def is_meaningful_chunk(chunk, min_words=15):
+    text = chunk["text"].strip()
+
+    if chunk.get("image_data"):
+        return True
+
+    words = re.findall(r'\w+', text)
+
+    if len(words) < min_words:
+        return False
+
+    if text.isupper():
+        return False
+
+    return True
+
 def ask_question_logic(query, chunks, idf_dict):
-
     query_tokens = tokenize(query)
+    
+    query_bigrams = [f"{query_tokens[i].lower()} {query_tokens[i+1].lower()}" 
+                     for i in range(len(query_tokens) - 1)]
 
-    if not query_tokens:
-        return {
-            "status": "No Query",
-            "answer": "Không tìm thấy từ khóa đủ mạnh.",
-            "page": 0,
-            "raw_data": []
-        }
+    if not query_bigrams:
+        return {"status": "No Result", "answer": "Vui lòng nhập câu hỏi dài hơn 2 từ.", "raw_data": []}
 
     query_tf = compute_tf(query_tokens)
     results = []
@@ -66,11 +92,17 @@ def ask_question_logic(query, chunks, idf_dict):
 
     for chunk in chunks:
 
+        if not chunk_contains_exact_bigram(chunk["text"], query_tokens):
+            continue
+
+        if not is_meaningful_chunk(chunk):
+            continue
+
         score = calculate_cosine_similarity(query_tf, chunk["tf"], idf_dict)
 
         if score > 0.05:
 
-            highlighted_text = highlight_text(chunk["text"], query_tokens)
+            highlighted_text = highlight_exact_bigrams(chunk["text"], query_tokens)
 
             snippet = chunk["text"][:100]
 
