@@ -28,7 +28,7 @@ public class JwtFilter implements Filter {
         HttpServletRequest req = (HttpServletRequest) request;
         HttpServletResponse res = (HttpServletResponse) response;
 
-        String path = req.getRequestURI();
+        String path = req.getServletPath();
 
         if (path.startsWith("/api/auth")
                 || path.startsWith("/swagger-ui")

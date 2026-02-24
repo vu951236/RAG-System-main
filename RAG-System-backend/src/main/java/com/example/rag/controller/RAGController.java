@@ -15,22 +15,23 @@ public class RAGController {
 
     private final RAGService service;
 
-    // Upload file
     @PostMapping(
             value = "/upload",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE
     )
-    public UploadResponse upload(
+    public ResponseEntity<UploadResponse> upload(
             @RequestPart("file") MultipartFile file
-    ) throws Exception {
-        return service.upload(file);
+    ) {
+        return ResponseEntity.ok(service.upload(file));
     }
 
-    // Ask question -> trả PDF
-    @PostMapping(value = "/ask", produces = MediaType.APPLICATION_PDF_VALUE)
+    @PostMapping(
+            value = "/ask",
+            produces = MediaType.APPLICATION_PDF_VALUE
+    )
     public ResponseEntity<byte[]> ask(
             @RequestBody AskRequest request
-    ) throws Exception {
+    ) {
 
         byte[] pdfBytes = service.askAndGeneratePdf(request);
 
@@ -38,6 +39,7 @@ public class RAGController {
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "attachment; filename=ket_qua_rag.pdf")
                 .contentType(MediaType.APPLICATION_PDF)
+                .contentLength(pdfBytes.length)
                 .body(pdfBytes);
     }
 }

@@ -1,0 +1,9 @@
+package com.example.rag.dto.request;
+
+import lombok.Data;
+
+@Data
+public class VerifyOtpRequest {
+    private String username;
+    private String otp;
+}
