@@ -165,4 +165,30 @@ public class AuthService {
                 user.getRole()
         );
     }
+
+    public boolean validateToken(String token) {
+        try {
+            return jwtUtil.validateToken(token);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public LoginResponse refreshToken(String token) {
+
+        String username = jwtUtil.extractUsername(token);
+
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() ->
+                        new ApiException("User not found", HttpStatus.NOT_FOUND)
+                );
+
+        String newToken = jwtUtil.generateToken(user.getUsername());
+
+        return new LoginResponse(
+                newToken,
+                user.getUsername(),
+                user.getRole()
+        );
+    }
 }

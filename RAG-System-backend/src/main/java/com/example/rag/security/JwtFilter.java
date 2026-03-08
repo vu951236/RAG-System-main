@@ -1,34 +1,39 @@
 package com.example.rag.security;
 
-import jakarta.servlet.*;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Component;
+
+import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.List;
 
 @Component
 @RequiredArgsConstructor
-public class JwtFilter implements Filter {
+public class JwtFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
 
     @Override
-    public void doFilter(
-            ServletRequest request,
-            ServletResponse response,
-            FilterChain chain
-    ) throws IOException, ServletException {
+    protected void doFilterInternal(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            FilterChain filterChain
+    ) throws ServletException, IOException {
 
-        HttpServletRequest req = (HttpServletRequest) request;
-        HttpServletResponse res = (HttpServletResponse) response;
-
-        String path = req.getServletPath();
+        String path = request.getServletPath();
 
         if (path.startsWith("/api/auth")
                 || path.startsWith("/swagger-ui")
@@ -36,35 +41,34 @@ public class JwtFilter implements Filter {
                 || path.startsWith("/swagger-resources")
                 || path.startsWith("/webjars")) {
 
-            chain.doFilter(request, response);
+            filterChain.doFilter(request, response);
             return;
         }
 
-        String header = req.getHeader("Authorization");
+        String token = null;
 
-        if (header == null || !header.startsWith("Bearer ")) {
-            res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            return;
+        if (request.getCookies() != null) {
+            for (Cookie cookie : request.getCookies()) {
+                if ("accessToken".equals(cookie.getName())) {
+                    token = cookie.getValue();
+                }
+            }
         }
 
-        String token = header.substring(7);
+        if (token != null && jwtUtil.validateToken(token)) {
 
-        if (!jwtUtil.validateToken(token)) {
-            res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            return;
+            String username = jwtUtil.extractUsername(token);
+
+            UsernamePasswordAuthenticationToken authentication =
+                    new UsernamePasswordAuthenticationToken(
+                            username,
+                            null,
+                            List.of(new SimpleGrantedAuthority("ROLE_USER"))
+                    );
+
+            SecurityContextHolder.getContext().setAuthentication(authentication);
         }
 
-        String username = jwtUtil.extractUsername(token);
-
-        UsernamePasswordAuthenticationToken authentication =
-                new UsernamePasswordAuthenticationToken(
-                        username,
-                        null,
-                        List.of(new SimpleGrantedAuthority("ROLE_USER"))
-                );
-
-        SecurityContextHolder.getContext().setAuthentication(authentication);
-
-        chain.doFilter(request, response);
+        filterChain.doFilter(request, response);
     }
 }

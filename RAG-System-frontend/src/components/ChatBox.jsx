@@ -1,102 +1,197 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import ragService from "../services/ragService";
 
-function ChatBox() {
+function ChatBox({ convId, onUpdateSidebar }) {
 
     const [question, setQuestion] = useState("");
     const [messages, setMessages] = useState([]);
+    const [loading, setLoading] = useState(false);
 
-    const handleAsk = async () => {
+    const messagesEndRef = useRef(null);
 
-        if (!question) return;
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [messages]);
 
-        setMessages(prev => [
-            ...prev,
-            { type: "user", text: question }
-        ]);
+    const loadMessages = async () => {
 
         try {
 
-            const response = await ragService.askQuestion(question);
+            const res = await ragService.getMessagesByConv(convId);
 
-            const url = window.URL.createObjectURL(
-                new Blob([response.data])
-            );
-
-            const link = document.createElement("a");
-            link.href = url;
-            link.setAttribute("download", "ket_qua_rag.pdf");
-            document.body.appendChild(link);
-            link.click();
-
-            setMessages(prev => [
-                ...prev,
-                { type: "bot", text: "Đã tạo file PDF kết quả." }
+            const history = res.data.flatMap(m => [
+                {
+                    type: "user",
+                    text: m.question
+                },
+                {
+                    type: "bot",
+                    pdf: m.pdfPath
+                }
             ]);
+
+            setMessages(history);
 
         } catch (error) {
-            setMessages(prev => [
-                ...prev,
-                { type: "bot", text: "Có lỗi xảy ra." }
-            ]);
+
+            console.error("Lỗi tải tin nhắn:", error);
+
         }
 
-        setQuestion("");
     };
 
+    useEffect(() => {
+
+        if (convId) {
+            loadMessages();
+        }
+
+    }, [convId]);
+
+
+    const handleAsk = async () => {
+
+        if (loading) return;
+
+        if (!question.trim() || question.trim().split(/\s+/).length < 3) {
+            alert("Câu hỏi phải dài hơn 2 từ");
+            return;
+        }
+
+        const currentQuestion = question;
+
+        setMessages(prev => [
+            ...prev,
+            { type: "user", text: currentQuestion }
+        ]);
+
+        setQuestion("");
+        setLoading(true);
+
+        try {
+
+            await ragService.askQuestion(convId, currentQuestion);
+
+            // reload messages sau khi backend tạo PDF
+            await loadMessages();
+
+            onUpdateSidebar?.();
+
+        } catch (error) {
+
+            console.error("Lỗi khi gọi AI:", error);
+
+            let message = "Có lỗi xảy ra";
+
+            if (error.response?.data?.message) {
+                message = error.response.data.message;
+            }
+
+            setMessages(prev => [
+                ...prev,
+                { type: "bot", error: message }
+            ]);
+
+        } finally {
+
+            setLoading(false);
+
+        }
+
+    };
+
+
     return (
-        <div style={{ marginTop: 20 }}>
 
-            <h3>Chat hỏi đáp</h3>
+        <div className="chat-box-container">
 
-            {/* KHUNG CHAT */}
-            <div
-                style={{
-                    border: "1px solid #ccc",
-                    borderRadius: 10,
-                    height: 300,
-                    overflowY: "auto",
-                    padding: 10,
-                    marginBottom: 10
-                }}
-            >
-                {messages.map((msg, index) => (
-                    <div
-                        key={index}
-                        style={{
-                            textAlign: msg.type === "user" ? "right" : "left",
-                            marginBottom: 8
-                        }}
-                    >
-            <span
-                style={{
-                    background: msg.type === "user" ? "#4CAF50" : "#eee",
-                    color: msg.type === "user" ? "white" : "black",
-                    padding: "8px 12px",
-                    borderRadius: 12,
-                    display: "inline-block",
-                    maxWidth: "70%"
-                }}
-            >
-              {msg.text}
-            </span>
+            <div className="messages-container">
+
+                {messages.length === 0 && (
+                    <div style={{
+                        textAlign: "center",
+                        color: "#8e8ea0",
+                        marginTop: "20px"
+                    }}>
+                        Hãy bắt đầu bằng một câu hỏi...
                     </div>
+                )}
+
+                {messages.map((msg, index) => (
+
+                    <div key={index} className={`message-row ${msg.type}`}>
+
+                        <div className="message-content">
+
+                            {/* USER */}
+                            {msg.type === "user" && msg.text}
+
+                            {/* BOT PDF */}
+                            {msg.type === "bot" && msg.pdf && (
+                                <a
+                                    href={`http://localhost:8080/uploads/pdf/${msg.pdf}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                >
+                                    📄 Xem PDF
+                                </a>
+                            )}
+
+                            {/* ERROR */}
+                            {msg.error && (
+                                <span style={{ color: "red" }}>
+                                    {msg.error}
+                                </span>
+                            )}
+
+                        </div>
+
+                    </div>
+
                 ))}
+
+                {loading && (
+                    <div className="message-row bot">
+                        <div className="message-content italic">
+                            AI đang suy nghĩ...
+                        </div>
+                    </div>
+                )}
+
+                <div ref={messagesEndRef}></div>
+
             </div>
 
-            {/* INPUT */}
-            <div style={{ display: "flex", gap: 10 }}>
-                <input
-                    style={{ flex: 1, padding: 8 }}
-                    value={question}
-                    onChange={(e) => setQuestion(e.target.value)}
-                    placeholder="Nhập câu hỏi..."
-                />
-                <button onClick={handleAsk}>Gửi</button>
+
+            <div className="input-container">
+
+                <div className="input-wrapper">
+
+                    <input
+                        className="chat-input"
+                        value={question}
+                        onChange={(e) => setQuestion(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleAsk()}
+                        placeholder="Nhập câu hỏi..."
+                        disabled={loading}
+                    />
+
+                    <button
+                        className="send-btn"
+                        onClick={handleAsk}
+                        disabled={loading || !question.trim()}
+                    >
+                        {loading ? "..." : "Gửi"}
+                    </button>
+
+                </div>
+
             </div>
 
         </div>
+
     );
+
 }
 
 export default ChatBox;
