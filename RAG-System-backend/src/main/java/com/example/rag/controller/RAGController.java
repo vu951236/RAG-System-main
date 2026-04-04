@@ -4,12 +4,12 @@ import com.example.rag.dto.request.AskRequest;
 import com.example.rag.dto.response.ChatHistoryResponse;
 import com.example.rag.dto.response.ConversationResponse;
 import com.example.rag.dto.response.UploadResponse;
-import com.example.rag.entity.Conversation;
 import com.example.rag.service.RAGService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.core.io.Resource;
 
 import java.util.List;
 
@@ -40,14 +40,26 @@ public class RAGController {
             @PathVariable Long id,
             @RequestBody AskRequest request
     ) {
-
         service.askInConversation(id, request);
-
         return ResponseEntity.ok().build();
     }
 
-    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<UploadResponse> upload(@RequestPart("file") MultipartFile file) {
-        return ResponseEntity.ok(service.upload(file));
+    @PostMapping(
+            value = "/conversation/{id}/upload",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+    )
+    public ResponseEntity<UploadResponse> upload(
+            @PathVariable Long id,
+            @RequestPart("file") MultipartFile file
+    ) {
+        return ResponseEntity.ok(service.upload(id, file));
+    }
+
+    @GetMapping("/conversation/{id}/file/{fileName}")
+    public ResponseEntity<Resource> downloadFile(
+            @PathVariable Long id,
+            @PathVariable String fileName
+    ) {
+        return service.downloadFile(id, fileName);
     }
 }

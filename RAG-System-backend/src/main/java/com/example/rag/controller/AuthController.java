@@ -51,10 +51,10 @@ public class AuthController {
 
         ResponseCookie cookie = ResponseCookie.from("accessToken", loginResponse.getAccessToken())
                 .httpOnly(true)
-                .secure(false)
+                .secure(true)
+                .sameSite("None")
                 .path("/")
                 .maxAge(60 * 60)
-                .sameSite("Lax")
                 .build();
 
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
@@ -76,10 +76,10 @@ public class AuthController {
 
         ResponseCookie cookie = ResponseCookie.from("accessToken", loginResponse.getAccessToken())
                 .httpOnly(true)
-                .secure(false)
+                .secure(true)
+                .sameSite("None")
                 .path("/")
                 .maxAge(60 * 60)
-                .sameSite("Lax")
                 .build();
 
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
@@ -92,7 +92,8 @@ public class AuthController {
 
         ResponseCookie cookie = ResponseCookie.from("accessToken", "")
                 .httpOnly(true)
-                .secure(false)
+                .secure(true)
+                .sameSite("None")
                 .path("/")
                 .maxAge(0)
                 .build();

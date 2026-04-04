@@ -36,6 +36,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
+
 @Service
 @RequiredArgsConstructor
 public class RAGService {
@@ -45,7 +48,10 @@ public class RAGService {
     private final ConversationRepository conversationRepository;
     private final UserRepository userRepository;
 
-    private static final String FASTAPI_BASE = "http://127.0.0.1:8000";
+    private static final String FASTAPI_BASE = "http://40.83.94.126:30081";
+    private static final long MAX_FILE_SIZE = 10 * 1024 * 1024;
+
+    private static final String UPLOAD_DIR = "uploads";
 
     public Long createNewConversation() {
 
@@ -61,81 +67,50 @@ public class RAGService {
     }
 
     public void askInConversation(Long conversationId, AskRequest askRequest) {
-
         try {
+            User user = getCurrentUser();
+            Conversation conversation = conversationRepository.findById(conversationId)
+                    .orElseThrow(() -> new ApiException("Hội thoại không tồn tại", HttpStatus.NOT_FOUND));
+
+            if (!conversation.getUser().getId().equals(user.getId())) {
+                throw new ApiException("Bạn không có quyền truy cập hội thoại này", HttpStatus.FORBIDDEN);
+            }
+
+            askRequest.setUserId(user.getId().toString());
+            askRequest.setConversationId(conversationId.toString());
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
+            HttpEntity<AskRequest> request = new HttpEntity<>(askRequest, headers);
 
-            HttpEntity<AskRequest> request =
-                    new HttpEntity<>(askRequest, headers);
-
-            ResponseEntity<AskResponse> response =
-                    restTemplate.postForEntity(
-                            FASTAPI_BASE + "/ask",
-                            request,
-                            AskResponse.class
-                    );
+            ResponseEntity<AskResponse> response = restTemplate.postForEntity(
+                    FASTAPI_BASE + "/ask", request, AskResponse.class);
 
             AskResponse result = response.getBody();
 
-            if (result == null) {
-                throw new ApiException(
-                        "AI không trả dữ liệu",
-                        HttpStatus.BAD_GATEWAY
-                );
-            }
-
-            if (result.getRaw_data() == null || result.getRaw_data().isEmpty()) {
-                throw new ApiException(
-                        "Chưa upload tài liệu nên không thể truy vấn",
-                        HttpStatus.BAD_REQUEST
-                );
-            }
-
-            if (result.getAnswer() == null || result.getAnswer().trim().isEmpty()) {
-                throw new ApiException(
-                        "AI chưa trả câu trả lời",
-                        HttpStatus.BAD_GATEWAY
-                );
+            // Kiểm tra kết quả từ AI
+            if (result == null || result.getAnswer() == null) {
+                throw new ApiException("AI không trả dữ liệu câu trả lời", HttpStatus.BAD_GATEWAY);
             }
 
             String answer = result.getAnswer().trim();
+            if (answer.equalsIgnoreCase("Vui lòng nhập câu hỏi dài hơn 2 từ.")) return;
 
-            if (answer.equalsIgnoreCase("Vui lòng nhập câu hỏi dài hơn 2 từ.")) {
-                return;
-            }
-
+            // Tạo PDF kết quả RAG
             byte[] pdfBytes = generatePdf(result);
+            String fileName = "rag_" + java.util.UUID.randomUUID() + ".pdf";
 
-            String fileName = "rag_" + System.currentTimeMillis() + ".pdf";
-
-            Path path = Paths.get("uploads/pdf/" + fileName);
-
+            Path path = Paths.get(UPLOAD_DIR).resolve(fileName);
             Files.createDirectories(path.getParent());
-
             Files.write(path, pdfBytes);
 
-            saveChatLogic(
-                    conversationId,
-                    askRequest.getQuestion(),
-                    answer,
-                    fileName
-            );
+            saveChatLogic(conversationId, askRequest.getQuestion(), answer, fileName);
 
         } catch (ApiException e) {
-
             throw e;
-
         } catch (Exception e) {
-
-            throw new ApiException(
-                    "Không thể kết nối tới hệ thống AI",
-                    HttpStatus.BAD_GATEWAY
-            );
-
+            throw new ApiException("Không thể kết nối tới hệ thống AI", HttpStatus.BAD_GATEWAY);
         }
-
     }
 
     public List<ConversationResponse> getUserConversations() {
@@ -155,6 +130,24 @@ public class RAGService {
 
     public List<ChatHistoryResponse> getMessagesByConversation(Long conversationId) {
 
+        User user = getCurrentUser();
+
+        Conversation conversation =
+                conversationRepository.findById(conversationId)
+                        .orElseThrow(() ->
+                                new ApiException(
+                                        "Conversation không tồn tại",
+                                        HttpStatus.NOT_FOUND
+                                )
+                        );
+
+        if (!conversation.getUser().getId().equals(user.getId())) {
+            throw new ApiException(
+                    "Bạn không có quyền truy cập hội thoại này",
+                    HttpStatus.FORBIDDEN
+            );
+        }
+
         return chatHistoryRepository
                 .findByConversationIdOrderByCreatedAtAsc(conversationId)
                 .stream()
@@ -168,44 +161,77 @@ public class RAGService {
                 .collect(Collectors.toList());
     }
 
-    public UploadResponse upload(MultipartFile file) {
-
+    public UploadResponse upload(Long conversationId, MultipartFile file) {
         try {
+            User user = getCurrentUser();
+            Conversation conversation = conversationRepository.findById(conversationId)
+                    .orElseThrow(() -> new ApiException("Conversation not found", HttpStatus.NOT_FOUND));
 
+            if (!conversation.getUser().getId().equals(user.getId())) {
+                throw new ApiException("Bạn không có quyền upload", HttpStatus.FORBIDDEN);
+            }
+
+            // Kiểm tra định dạng file
+            String filename = file.getOriginalFilename();
+            if (file.isEmpty() || filename == null || !filename.toLowerCase().endsWith(".pdf")) {
+                throw new ApiException("Vui lòng upload file PDF hợp lệ", HttpStatus.BAD_REQUEST);
+            }
+
+            // Gửi file sang FastAPI
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.MULTIPART_FORM_DATA);
 
-            ByteArrayResource resource =
-                    new ByteArrayResource(file.getBytes()) {
-                        @Override
-                        public String getFilename() {
-                            return file.getOriginalFilename();
-                        }
-                    };
+            ByteArrayResource resource = new ByteArrayResource(file.getBytes()) {
+                @Override
+                public String getFilename() { return file.getOriginalFilename(); }
+            };
 
-            MultiValueMap<String, Object> body =
-                    new LinkedMultiValueMap<>();
-
+            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
             body.add("file", resource);
 
-            HttpEntity<MultiValueMap<String, Object>> request =
-                    new HttpEntity<>(body, headers);
+            HttpEntity<MultiValueMap<String, Object>> request = new HttpEntity<>(body, headers);
 
-            return restTemplate
-                    .postForEntity(
-                            FASTAPI_BASE + "/upload",
-                            request,
-                            UploadResponse.class
-                    )
-                    .getBody();
+            String url = String.format("%s/upload?user_id=%s&conversation_id=%s",
+                    FASTAPI_BASE, user.getId(), conversationId);
+
+            UploadResponse response = restTemplate.postForEntity(url, request, UploadResponse.class).getBody();
+
+            if ("Cuộc trò chuyện mới".equals(conversation.getTitle())) {
+                conversation.setTitle(filename);
+                conversationRepository.save(conversation);
+            }
+
+            return response;
 
         } catch (IOException e) {
+            throw new ApiException("Lỗi xử lý file", HttpStatus.BAD_REQUEST);
+        }
+    }
 
-            throw new ApiException(
-                    "Lỗi đọc file",
-                    HttpStatus.BAD_REQUEST
-            );
+    public ResponseEntity<Resource> downloadFile(Long conversationId, String fileName) {
+        User user = getCurrentUser();
+        Conversation conversation = conversationRepository.findById(conversationId)
+                .orElseThrow(() -> new ApiException("Không tìm thấy hội thoại", HttpStatus.NOT_FOUND));
 
+        if (!conversation.getUser().getId().equals(user.getId())) {
+            throw new ApiException("Bạn không có quyền tải file này", HttpStatus.FORBIDDEN);
+        }
+
+        try {
+            Path filePath = Paths.get(UPLOAD_DIR).resolve(fileName).normalize();
+
+            if (!Files.exists(filePath)) {
+                throw new ApiException("File không tồn tại trên server", HttpStatus.NOT_FOUND);
+            }
+
+            Resource resource = new UrlResource(filePath.toUri());
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_PDF)
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileName + "\"")
+                    .body(resource);
+
+        } catch (Exception e) {
+            throw new ApiException("Lỗi khi tải file", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -268,7 +294,7 @@ public class RAGService {
 
         chatHistoryRepository.save(history);
     }
-    
+
     private byte[] generatePdf(AskResponse result) {
 
         try (ByteArrayOutputStream baos =
