@@ -167,3 +167,18 @@
   flex-direction: column;
   height: 100%;
 }
+
+.register-link{
+  text-align:center;
+  margin-top:15px;
+}
+
+.register-link a{
+  color:#4CAF50;
+  text-decoration:none;
+  font-weight:bold;
+}
+
+.register-link a:hover{
+  text-decoration:underline;
+}

@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import ragService from "../services/ragService";
 import "../styles/upload.css";
 
-function UploadBox() {
+function UploadBox({ convId }) {
 
     const [file, setFile] = useState(null);
     const [status, setStatus] = useState("");
@@ -10,11 +10,11 @@ function UploadBox() {
 
     const handleFileChange = (e) => {
         const selected = e.target.files[0];
-
         if (!selected) return;
 
         if (selected.type !== "application/pdf") {
             setStatus("Chỉ được upload file PDF");
+            setFile(null);
             return;
         }
 
@@ -23,39 +23,37 @@ function UploadBox() {
     };
 
     const handleUpload = async () => {
-
+        // Kiểm tra xem đã có file và ID hội thoại chưa
         if (!file) {
             setStatus("Vui lòng chọn file");
             return;
         }
+        if (!convId) {
+            setStatus("Không tìm thấy ID hội thoại!");
+            return;
+        }
 
         try {
-
             setLoading(true);
             setStatus("Đang upload...");
 
-            await ragService.uploadFile(file);
+            const response = await ragService.uploadFile(convId, file);
 
-            setStatus("Upload thành công!");
+            console.log("Server trả về:", response.data);
+            setStatus(`Upload thành công: ${response.data.fileName || "File đã lưu"}`);
+
             setFile(null);
-
         } catch (error) {
-
             console.error("Chi tiết lỗi upload:", error);
-            setStatus("Upload thất bại!");
-
+            setStatus("Upload thất bại! Kiểm tra kết nối hoặc CORS.");
         } finally {
-
             setLoading(false);
-
         }
     };
 
     return (
         <div className="upload-container">
-
             <h3>Upload tài liệu</h3>
-
             <input
                 type="file"
                 accept="application/pdf"
@@ -65,7 +63,7 @@ function UploadBox() {
 
             {file && (
                 <p className="file-name">
-                    File: {file.name}
+                    File chuẩn bị gửi: <strong>{file.name}</strong>
                 </p>
             )}
 
@@ -74,7 +72,7 @@ function UploadBox() {
                 disabled={loading || !file}
                 className="upload-btn"
             >
-                {loading ? "Đang upload..." : "Upload"}
+                {loading ? "Đang xử lý..." : "Bắt đầu Upload"}
             </button>
 
             {loading && (
@@ -83,8 +81,9 @@ function UploadBox() {
                 </div>
             )}
 
-            {status && <p className="status">{status}</p>}
-
+            {status && <p className={`status ${status.includes("thành công") ? "success" : "error"}`}>
+                {status}
+            </p>}
         </div>
     );
 }

@@ -72,7 +72,6 @@ function ChatBox({ convId, onUpdateSidebar }) {
 
             await ragService.askQuestion(convId, currentQuestion);
 
-            // reload messages sau khi backend tạo PDF
             await loadMessages();
 
             onUpdateSidebar?.();
@@ -123,21 +122,16 @@ function ChatBox({ convId, onUpdateSidebar }) {
 
                         <div className="message-content">
 
-                            {/* USER */}
                             {msg.type === "user" && msg.text}
 
-                            {/* BOT PDF */}
                             {msg.type === "bot" && msg.pdf && (
-                                <a
-                                    href={`http://localhost:8080/uploads/pdf/${msg.pdf}`}
-                                    target="_blank"
-                                    rel="noreferrer"
+                                <button
+                                    onClick={() => ragService.downloadPdf(convId, msg.pdf)}
                                 >
-                                    📄 Xem PDF
-                                </a>
+                                    📄 Tải PDF
+                                </button>
                             )}
 
-                            {/* ERROR */}
                             {msg.error && (
                                 <span style={{ color: "red" }}>
                                     {msg.error}

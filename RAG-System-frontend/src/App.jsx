@@ -7,6 +7,8 @@ import ragService from "./services/ragService";
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
 import Login from "./pages/Login.jsx";
 import authService from "./services/authService.js";
+import Register from "./pages/Register.jsx";
+import VerifyOtp from "./pages/VerifyOtp.jsx";
 
 function MainLayout() {
 
@@ -111,12 +113,11 @@ function MainLayout() {
 
                 <div className="sidebar-footer">
 
-                    <UploadBox />
+                    <UploadBox convId={selectedConvId} />
 
                     <button className="logout-btn" onClick={handleLogout}>
                         Đăng xuất
                     </button>
-
                 </div>
 
             </div>
@@ -155,7 +156,12 @@ function App() {
     return (
         <BrowserRouter>
             <Routes>
+
                 <Route path="/login" element={<Login />} />
+
+                <Route path="/register" element={<Register />} />
+
+                <Route path="/verify" element={<VerifyOtp />} />
 
                 <Route
                     path="/"
@@ -167,6 +173,7 @@ function App() {
                 />
 
                 <Route path="*" element={<Navigate to="/" replace />} />
+
             </Routes>
         </BrowserRouter>
     );

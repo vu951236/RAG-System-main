@@ -2,7 +2,7 @@ import axios from "axios";
 import authService from "../services/authService";
 
 const axiosClient = axios.create({
-    baseURL: "http://localhost:8080/api",
+    baseURL: "https://also-preserve-advice-thesis.trycloudflare.com/api",
     withCredentials: true
 });
 
