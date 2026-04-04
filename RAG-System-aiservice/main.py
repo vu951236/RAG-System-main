@@ -1,65 +1,38 @@
 from fastapi import FastAPI, UploadFile, File
 import uvicorn
 import pypdf
+import uuid
 import os
-import re
-import easyocr
 import base64
+import easyocr
+import numpy as np
+import cv2
+import re
+from algorithms import manual_chunking
+
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
+from sentence_transformers import SentenceTransformer
 
 from algorithms import (
     tokenize,
-    manual_chunking,
     compute_tf,
     compute_idf,
     calculate_cosine_similarity
 )
 
-app = FastAPI(title="Search RAG with OCR")
+app = FastAPI(title="Production RAG with Qdrant")
 
 reader = easyocr.Reader(['vi', 'en'])
+model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
-knowledge_base = []
-idf_brain = {}
+qdrant_url = os.getenv("QDRANT_URL", "http://qdrant:6333")
+client = QdrantClient(url=qdrant_url)
 
-# TEXT NORMALIZE
-def minimal_normalize(text):
-    if not text:
-        return ""
-    return " ".join(text.split())
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-def chunk_contains_exact_bigram(text, query_tokens):
-
-    if len(query_tokens) < 2:
-        return False
-
-    text_lower = text.lower()
-
-    for i in range(len(query_tokens) - 1):
-        bigram = query_tokens[i].lower() + " " + query_tokens[i+1].lower()
-        pattern = r'\b' + re.escape(bigram) + r'\b'
-
-        if re.search(pattern, text_lower):
-            return True
-
-    return False
-
-def highlight_exact_bigrams(text, query_tokens):
-
-    if len(query_tokens) < 2:
-        return text
-
-    for i in range(len(query_tokens) - 1):
-        bigram = query_tokens[i].lower() + " " + query_tokens[i+1].lower()
-        pattern = r'\b' + re.escape(bigram) + r'\b'
-
-        text = re.sub(
-            pattern,
-            lambda m: f"<font color='red'><b>{m.group()}</b></font>",
-            text,
-            flags=re.IGNORECASE
-        )
-
-    return text
+# ===== UTILS =====
 
 def is_meaningful_chunk(chunk, min_words=15):
     text = chunk["text"].strip()
@@ -125,7 +98,6 @@ def ask_question_logic(query, chunks, idf_dict):
             "raw_data": []
         }
 
-    # Phân loại text và ảnh
     text_results = [r for r in results if not r.get("image_data")]
     image_results = [r for r in results if r.get("image_data")]
 
@@ -140,7 +112,6 @@ def ask_question_logic(query, chunks, idf_dict):
     if not any(r.get("image_data") for r in top_results):
         top_results.extend(image_results[:3])
 
-    # Build HTML
     full_body = ""
 
     for r in top_results:
@@ -158,92 +129,169 @@ def ask_question_logic(query, chunks, idf_dict):
         "raw_data": top_results
     }
 
+def ensure_collection(collection_name):
+    collections = client.get_collections().collections
+    exists = any(c.name == collection_name for c in collections)
+    if not exists:
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=models.VectorParams(
+                size=384, 
+                distance=models.Distance.COSINE
+            ),
+        )
 
-# UPLOAD PDF
+def minimal_normalize(text):
+    return " ".join(text.split()) if text else ""
+
+def chunk_contains_exact_bigram(text, query_tokens):
+    if len(query_tokens) < 2: return False
+    text_lower = text.lower()
+    for i in range(len(query_tokens) - 1):
+        bigram = query_tokens[i].lower() + " " + query_tokens[i+1].lower()
+        if re.search(r'\b' + re.escape(bigram) + r'\b', text_lower):
+            return True
+    return False
+
+def highlight_exact_bigrams(text, query_tokens):
+    if len(query_tokens) < 2: return text
+    for i in range(len(query_tokens) - 1):
+        bigram = query_tokens[i].lower() + " " + query_tokens[i+1].lower()
+        text = re.sub(
+            r'\b' + re.escape(bigram) + r'\b',
+            lambda m: f"<font color='red'><b>{m.group()}</b></font>",
+            text, flags=re.IGNORECASE
+        )
+    return text
+
+# ===== UPLOAD =====
+
 @app.post("/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(user_id: str, conversation_id: str, file: UploadFile = File(...)):
+    file_id = str(uuid.uuid4())
+    file_path = os.path.join(UPLOAD_DIR, f"{file_id}.pdf")
 
-    temp_path = f"temp_{file.filename}"
-
-    with open(temp_path, "wb") as f:
+    with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    try:
-        knowledge_base.clear()
-        pdf = pypdf.PdfReader(temp_path)
+    pdf = pypdf.PdfReader(file_path)
+    collection_name = f"user_{user_id}_conv_{conversation_id}"
+    ensure_collection(collection_name)
 
-        for page_idx, page in enumerate(pdf.pages):
-            page_number = page_idx + 1
+    points = []
 
-            # -------- TEXT --------
-            raw_content = page.extract_text() or ""
-            content = minimal_normalize(raw_content)
+    for page_idx, page in enumerate(pdf.pages):
+        page_number = page_idx + 1
+        text = minimal_normalize(page.extract_text() or "")
 
-            if content.strip():
-                page_chunks = manual_chunking(content, page_number=page_number)
+        # ✅ FIX: dùng manual_chunking
+        if text:
+            page_chunks = manual_chunking(text, page_number=page_number)
 
-                for chunk_data in page_chunks:
-                    tokens = tokenize(chunk_data["text"])
+            for chunk_data in page_chunks:
+                tokens = tokenize(chunk_data["text"])
 
-                    if tokens:
-                        knowledge_base.append({
+                if tokens:
+                    points.append(models.PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=model.encode(chunk_data["text"]).tolist(),
+                        payload={
                             "text": chunk_data["text"],
                             "page": page_number,
-                            "tokens": tokens,
-                            "tf": compute_tf(tokens)
-                        })
+                            "image": None 
+                        }
+                    ))
 
-            # -------- IMAGE OCR --------
-            try:
-                for img_obj in page.images:
-                    img_bytes = img_obj.data
+        # OCR
+        try:
+            for img_file in page.images:
+                img_bytes = img_file.data
+                nparr = np.frombuffer(img_bytes, np.uint8)
+                image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if image is None: continue
 
-                    ocr_results = reader.readtext(img_bytes, detail=0)
-                    ocr_text = minimal_normalize(" ".join(ocr_results))
+                ocr_result = reader.readtext(image, detail=0)
+                text_img = minimal_normalize(" ".join(ocr_result))
 
-                    if len(ocr_text.strip()) > 3:
+                if len(text_img.strip()) > 3:
+                    encoded_img = base64.b64encode(img_bytes).decode()
 
-                        encoded_img = base64.b64encode(img_bytes).decode("utf-8")
-                        tokens = tokenize(ocr_text)
-
-                        knowledge_base.append({
-                            "text": f"[Nội dung ảnh]: {ocr_text}",
+                    points.append(models.PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=model.encode(text_img).tolist(),
+                        payload={
+                            "text": f"[Nội dung ảnh]: {text_img}",
                             "page": page_number,
-                            "tokens": tokens,
-                            "tf": compute_tf(tokens),
-                            "image_data": encoded_img
-                        })
+                            "image": encoded_img
+                        }
+                    ))
+        except Exception as e:
+            print(f"OCR error on page {page_number}: {e}")
 
-            except Exception:
-                continue
+    if points:
+        client.upsert(collection_name=collection_name, points=points)
 
-        global idf_brain
-        idf_brain = compute_idf([item["tokens"] for item in knowledge_base])
+    return {"status": "Success", "total_chunks": len(points)}
 
-        return {
-            "status": "Success",
-            "total_chunks": len(knowledge_base)
-        }
+# ===== ASK =====
 
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
-# ASK API
 @app.post("/ask")
 async def ask_ai(data: dict):
 
-    question = data.get("question", "")
+    user_id = data.get("user_id")
+    conversation_id = data.get("conversation_id")
+    question = data.get("question")
 
-    if not knowledge_base:
+    if not all([user_id, conversation_id, question]):
+        return {"status": "Error", "answer": "Thiếu dữ liệu"}
+
+    collection_name = f"user_{user_id}_conv_{conversation_id}"
+
+    # ✅ FIX: lấy toàn bộ data thay vì vector search
+    all_points, _ = client.scroll(
+        collection_name=collection_name,
+        limit=10000,
+        with_payload=True,
+        with_vectors=False
+    )
+
+    if not all_points:
         return {
-            "status": "No Data",
-            "answer": "Vui lòng upload tài liệu trước.",
+            "status": "No Result",
+            "answer": "Không có dữ liệu.",
             "raw_data": []
         }
 
-    return ask_question_logic(question, knowledge_base, idf_brain)
+    chunks = []
 
+    for point in all_points:
+        text = point.payload.get("text", "")
+        tokens = tokenize(text)
+
+        if not tokens:
+            continue
+
+        chunks.append({
+            "text": text,
+            "page": point.payload.get("page", "?"),
+            "tokens": tokens,
+            "tf": compute_tf(tokens),
+            "image_data": point.payload.get("image")
+        })
+
+    if not chunks:
+        return {
+            "status": "No Result",
+            "answer": "Dữ liệu không xử lý được.",
+            "raw_data": []
+        }
+
+    idf_dict = compute_idf([c["tokens"] for c in chunks])
+
+    result = ask_question_logic(question, chunks, idf_dict)
+    result["total_chunks"] = len(chunks)
+
+    return result
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

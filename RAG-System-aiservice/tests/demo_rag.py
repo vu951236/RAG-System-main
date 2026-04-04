@@ -27,11 +27,36 @@ ASK_TIMEOUT = 60
 RETRY_COUNT = 2
 
 # CLEAN TEXT
+import re
+
 def clean_for_pdf(text):
     if not text:
         return ""
+    
+    # 1. Chuyển đổi các thực thể XML cơ bản trước
     text = text.replace("&", "&amp;")
+    text = text.replace("<", "&lt;").replace(">", "&gt;")
+    
+    # 2. Khôi phục lại các thẻ định dạng mà ReportLab hỗ trợ
+    # Chúng ta phải khôi phục sau khi đã escape < và > ở bước trên
+    text = text.replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>")
+    text = text.replace("&lt;i&gt;", "<i>").replace("&lt;/i&gt;", "</i>")
+    text = text.replace("&lt;u&gt;", "<u>").replace("&lt;/u&gt;", "</u>")
+    
+    # 3. Xử lý thẻ <font color='red'>
+    # Chuyển từ &lt;font color='red'&gt; sang đúng định dạng <font color="red">
+    text = re.sub(r'&lt;font color=(?:\'|")(\w+)(?:\'|")&gt;', r'<font color="\1">', text)
+    text = text.replace("&lt;/font&gt;", "</font>")
+
+    # 4. QUAN TRỌNG: Sửa lỗi thẻ <br>
+    # ReportLab yêu cầu <br/> (có dấu gạch chéo) chứ không phải <br>
+    text = text.replace("&lt;br&gt;", "<br/>")
+    text = text.replace("&lt;br/&gt;", "<br/>")
     text = text.replace("\n", "<br/>")
+
+    # 5. Loại bỏ các ký tự điều khiển lỗi (như \uf06e hoặc các ký tự lạ gây crash parser)
+    text = "".join(ch for ch in text if ord(ch) >= 32 or ch in "\n\r\t")
+    
     return text
 
 # EXPORT PDF
@@ -150,27 +175,33 @@ def safe_post(url, **kwargs):
 
 # DEMO CHÍNH
 def run_demo(target_pdf):
+    # Khai báo ID giả định để backend phân loại collection
+    USER_ID = "user_123"
+    CONV_ID = "session_001"
 
     if not os.path.exists(target_pdf):
         print(f"Không tìm thấy file {target_pdf}")
         return
 
-    print("Upload tài liệu...")
+    print(f"Đang upload tài liệu: {target_pdf}...")
 
     try:
         with open(target_pdf, "rb") as f:
+            # Thêm params vào URL để khớp với định nghĩa của FastAPI
             response = safe_post(
                 f"{BASE_URL}/upload",
+                params={"user_id": USER_ID, "conversation_id": CONV_ID},
                 files={"file": f},
                 timeout=UPLOAD_TIMEOUT
             )
 
             if not response or response.status_code != 200:
-                print("Upload thất bại.")
+                detail = response.json() if response else "No response"
+                print(f"Upload thất bại. Chi tiết: {detail}")
                 return
 
     except Exception as e:
-        print(f"Lỗi upload: {e}")
+        print(f"Lỗi hệ thống khi upload: {e}")
         return
 
     print("Upload thành công.\n")
@@ -188,32 +219,41 @@ def run_demo(target_pdf):
     all_results = []
 
     for q in test_questions:
-
         print(f"Đang hỏi: {q[:50]}...")
         start = time.time()
 
+        # SỬA TẠI ĐÂY: Gửi kèm user_id và conversation_id trong body JSON
+        payload = {
+            "user_id": USER_ID,
+            "conversation_id": CONV_ID,
+            "question": q
+        }
+
         response = safe_post(
             f"{BASE_URL}/ask",
-            json={"question": q},
+            json=payload,
             timeout=ASK_TIMEOUT
         )
 
         if response and response.status_code == 200:
             data = response.json()
-
+            
+            # Lưu kết quả để xuất PDF
             all_results.append({
                 "question": q,
-                "answer": data.get("answer", ""),
-                "page": data.get("page", "N/A"),
+                "answer": data.get("answer", "Không có câu trả lời"),
+                "page": "Nhiều trang", # Bạn có thể lấy trang cụ thể từ raw_data nếu muốn
                 "time": time.time() - start,
                 "raw_data": data.get("raw_data", [])
             })
         else:
-            print("Không nhận được phản hồi.")
+            status = response.status_code if response else "Timeout"
+            print(f"Lỗi khi hỏi câu '{q[:20]}...': Status {status}")
 
     if all_results:
         export_to_pdf(all_results)
-
+    else:
+        print("Không có kết quả nào để xuất PDF.")
 
 if __name__ == "__main__":
     run_demo("test.pdf")
