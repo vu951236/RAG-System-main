@@ -1,0 +1,44 @@
+version: "3.9"
+
+networks:
+  rag-network:
+    driver: bridge
+
+services:
+  springboot:
+    build:
+      context: ./RAG-System-backend
+    container_name: rag-backend
+    restart: always
+
+    env_file:
+      - .env
+
+    ports:
+      - "8081:8080"
+    networks:
+      - rag-network
+    depends_on:
+      - qdrant
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rag-qdrant
+    restart: always
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    networks:
+      - rag-network
+  rag-ai:
+    build: ./RAG-System-aiservice
+    container_name: rag-ai
+    ports:
+      - "8000:8000"
+    networks:
+      - rag-network
+
+volumes:
+  qdrant_storage:

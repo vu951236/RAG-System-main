@@ -1,0 +1,15 @@
+FROM gradle:8.5-jdk17 AS build
+
+WORKDIR /app
+COPY . .
+
+RUN mkdir -p uploads/pdf && chmod 777 uploads/pdf
+
+RUN gradle build -x test
+
+FROM eclipse-temurin:17-jre-alpine
+
+WORKDIR /app
+COPY --from=build /app/build/libs/*.jar app.jar
+
+ENTRYPOINT ["java","-jar","app.jar"]

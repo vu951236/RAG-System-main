@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+pypdf
+easyocr
+numpy
+opencv-python-headless
+chromadb
+sentence-transformers
+qdrant-client
+pillow
+reportlab
+requests
+python-multipart
